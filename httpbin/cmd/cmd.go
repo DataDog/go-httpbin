@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -20,8 +21,9 @@ import (
 )
 
 const (
-	defaultListenHost = "0.0.0.0"
-	defaultListenPort = 8080
+	defaultListenHost    = "0.0.0.0"
+	defaultListenPort    = 8080
+	defaultTLSListenPort = 8443
 
 	// Reasonable defaults for our http server
 	srvReadTimeout       = 5 * time.Second
@@ -79,15 +81,26 @@ func mainImpl(args []string, getEnv func(string) string, getHostname func() (str
 	}
 	app := httpbin.New(opts...)
 
-	srv := &http.Server{
-		Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.ListenPort)),
+	plainSrv := &http.Server{
+		Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.PlainListenPort)),
 		Handler:           app.Handler(),
 		MaxHeaderBytes:    srvMaxHeaderBytes,
 		ReadHeaderTimeout: srvReadHeaderTimeout,
 		ReadTimeout:       srvReadTimeout,
 	}
+	var tlsSrv *http.Server
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		tlsSrv = &http.Server{
+			Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.TLSListenPort)),
+			Handler:           app.Handler(),
+			MaxHeaderBytes:    srvMaxHeaderBytes,
+			ReadHeaderTimeout: srvReadHeaderTimeout,
+			ReadTimeout:       srvReadTimeout,
+			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		}
+	}
 
-	if err := listenAndServeGracefully(srv, cfg, logger); err != nil {
+	if err := listenAndServeGracefully(plainSrv, tlsSrv, cfg, logger); err != nil {
 		logger.Printf("error: %s", err)
 		return 1
 	}
@@ -101,7 +114,8 @@ type config struct {
 	AllowedRedirectDomains []string
 	ListenHost             string
 	ExcludeHeaders         string
-	ListenPort             int
+	PlainListenPort        int
+	TLSListenPort          int
 	MaxBodySize            int64
 	MaxDuration            time.Duration
 	RealHostname           string
@@ -137,7 +151,8 @@ func loadConfig(args []string, getEnv func(string) string, getHostname func() (s
 	fs.BoolVar(&cfg.rawUseRealHostname, "use-real-hostname", false, "Expose value of os.Hostname() in the /hostname endpoint instead of dummy value")
 	fs.DurationVar(&cfg.MaxDuration, "max-duration", httpbin.DefaultMaxDuration, "Maximum duration a response may take")
 	fs.Int64Var(&cfg.MaxBodySize, "max-body-size", httpbin.DefaultMaxBodySize, "Maximum size of request or response, in bytes")
-	fs.IntVar(&cfg.ListenPort, "port", defaultListenPort, "Port to listen on")
+	fs.IntVar(&cfg.PlainListenPort, "plain-port", defaultListenPort, "Port to listen on")
+	fs.IntVar(&cfg.TLSListenPort, "tls-port", defaultTLSListenPort, "Port to listen on")
 	fs.StringVar(&cfg.rawAllowedRedirectDomains, "allowed-redirect-domains", "", "Comma-separated list of domains the /redirect-to endpoint will allow")
 	fs.StringVar(&cfg.ListenHost, "host", defaultListenHost, "Host to listen on")
 	fs.StringVar(&cfg.TLSCertFile, "https-cert-file", "", "HTTPS Server certificate file")
@@ -195,8 +210,14 @@ func loadConfig(args []string, getEnv func(string) string, getHostname func() (s
 	if cfg.ExcludeHeaders == "" && getEnv("EXCLUDE_HEADERS") != "" {
 		cfg.ExcludeHeaders = getEnv("EXCLUDE_HEADERS")
 	}
-	if cfg.ListenPort == defaultListenPort && getEnv("PORT") != "" {
-		cfg.ListenPort, err = strconv.Atoi(getEnv("PORT"))
+	if cfg.PlainListenPort == defaultListenPort && getEnv("PLAIN_PORT") != "" {
+		cfg.PlainListenPort, err = strconv.Atoi(getEnv("PLAIN_PORT"))
+		if err != nil {
+			return nil, configErr("invalid value %#v for env var PORT: parse error", getEnv("PORT"))
+		}
+	}
+	if cfg.TLSListenPort == defaultTLSListenPort && getEnv("TLS_PORT") != "" {
+		cfg.TLSListenPort, err = strconv.Atoi(getEnv("TLS_PORT"))
 		if err != nil {
 			return nil, configErr("invalid value %#v for env var PORT: parse error", getEnv("PORT"))
 		}
@@ -243,7 +264,7 @@ func loadConfig(args []string, getEnv func(string) string, getHostname func() (s
 	return cfg, nil
 }
 
-func listenAndServeGracefully(srv *http.Server, cfg *config, logger *log.Logger) error {
+func listenAndServeGracefully(plainSrv, tlsSrv *http.Server, cfg *config, logger *log.Logger) error {
 	doneCh := make(chan error, 1)
 
 	go func() {
@@ -254,20 +275,29 @@ func listenAndServeGracefully(srv *http.Server, cfg *config, logger *log.Logger)
 		logger.Printf("shutting down ...")
 		ctx, cancel := context.WithTimeout(context.Background(), cfg.MaxDuration+1*time.Second)
 		defer cancel()
-		doneCh <- srv.Shutdown(ctx)
+		if tlsSrv != nil {
+			_ = tlsSrv.Shutdown(ctx)
+		}
+		doneCh <- plainSrv.Shutdown(ctx)
 	}()
 
-	var err error
-	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
-		logger.Printf("go-httpbin listening on https://%s", srv.Addr)
-		err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-	} else {
-		logger.Printf("go-httpbin listening on http://%s", srv.Addr)
-		err = srv.ListenAndServe()
+	if tlsSrv != nil {
+		go func() {
+			logger.Printf("go-httpbin listening on https://%s", tlsSrv.Addr)
+			err := tlsSrv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			if err != nil && err != http.ErrServerClosed {
+				log.Println(err)
+			}
+		}()
 	}
-	if err != nil && err != http.ErrServerClosed {
-		return err
-	}
+
+	go func() {
+		logger.Printf("go-httpbin listening on http://%s", plainSrv.Addr)
+		err := plainSrv.ListenAndServe()
+		if err != nil && err != http.ErrServerClosed {
+			log.Println(err)
+		}
+	}()
 
 	return <-doneCh
 }
