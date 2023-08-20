@@ -16,6 +16,7 @@ GOLINT      := go run golang.org/x/lint/golint@latest
 REFLEX      := go run github.com/cespare/reflex@v0.3.1
 STATICCHECK := go run honnef.co/go/tools/cmd/staticcheck@2023.1.3
 
+DOCKER_TARGET ?= golang:1.21
 
 # =============================================================================
 # build
@@ -88,6 +89,6 @@ image:
 imagepush:
 	docker buildx create --name $(NAME)
 	docker buildx use $(NAME)
-	docker buildx build --progress=plain --push --platform linux/amd64,linux/arm64 -t $(DOCKER_TAG) .
+	docker buildx build --build-arg target_image=$(DOCKER_TARGET) --progress=plain --push --platform linux/amd64,linux/arm64 -t $(DOCKER_TAG) .
 	docker buildx rm $(NAME)
 .PHONY: imagepush
