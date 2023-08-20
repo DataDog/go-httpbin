@@ -86,8 +86,8 @@ image:
 .PHONY: image
 
 imagepush:
-	docker buildx create --name httpbin
-	docker buildx use httpbin
-	docker buildx build --push --platform linux/amd64,linux/arm64 -t $(DOCKER_TAG) .
-	docker buildx rm httpbin
+	docker buildx create --name $(NAME)
+	docker buildx use $(NAME)
+	docker buildx build --progress=plain --push --platform linux/amd64,linux/arm64 -t $(DOCKER_TAG) .
+	docker buildx rm $(NAME)
 .PHONY: imagepush

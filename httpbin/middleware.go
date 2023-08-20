@@ -128,7 +128,9 @@ func observe(o Observer, h http.Handler) http.Handler {
 		mw := &metaResponseWriter{w: w}
 		t := time.Now()
 		h.ServeHTTP(mw, r)
+
 		o(Result{
+			Proto:     r.Proto,
 			Status:    mw.Status(),
 			Method:    r.Method,
 			URI:       r.URL.RequestURI(),
@@ -149,6 +151,7 @@ type Result struct {
 	Duration  time.Duration
 	UserAgent string
 	ClientIP  string
+	Proto     string
 }
 
 // Observer is a function that will be called with the details of a handled
@@ -159,7 +162,7 @@ type Observer func(result Result)
 // format using the given stdlib logger
 func StdLogObserver(l *log.Logger) Observer {
 	const (
-		logFmt  = "time=%q status=%d method=%q uri=%q size_bytes=%d duration_ms=%0.02f user_agent=%q client_ip=%s"
+		logFmt  = "time=%q status=%d method=%q uri=%q size_bytes=%d duration_ms=%0.02f user_agent=%q client_ip=%s proto=%s"
 		dateFmt = "2006-01-02T15:04:05.9999"
 	)
 	return func(result Result) {
@@ -173,6 +176,7 @@ func StdLogObserver(l *log.Logger) Observer {
 			result.Duration.Seconds()*1e3, // https://github.com/golang/go/issues/5491#issuecomment-66079585
 			result.UserAgent,
 			result.ClientIP,
+			result.Proto,
 		)
 	}
 }

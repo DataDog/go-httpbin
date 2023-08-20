@@ -3,6 +3,8 @@ package httpbin
 import (
 	"net/http"
 	"time"
+
+	httptrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/net/http"
 )
 
 // Default configuration values
@@ -83,7 +85,7 @@ var _ http.Handler = &HTTPBin{}
 
 // Handler returns an http.Handler that exposes all HTTPBin endpoints
 func (h *HTTPBin) Handler() http.Handler {
-	mux := http.NewServeMux()
+	mux := httptrace.NewServeMux()
 
 	mux.HandleFunc("/", methods(h.Index, "GET"))
 	mux.HandleFunc("/forms/post", methods(h.FormsPost, "GET"))
