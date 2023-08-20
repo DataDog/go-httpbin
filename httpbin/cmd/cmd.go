@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
+
 	"github.com/mccutchen/go-httpbin/v2/httpbin"
 )
 
@@ -40,8 +42,8 @@ func Main() int {
 // mainImpl is the real implementation of Main(), extracted for better
 // testability.
 func mainImpl(args []string, getEnv func(string) string, getHostname func() (string, error), out io.Writer) int {
-	//tracer.Start()
-	//defer tracer.Stop()
+	tracer.Start()
+	defer tracer.Stop()
 
 	logger := log.New(out, "", 0)
 
