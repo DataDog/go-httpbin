@@ -1,10 +1,14 @@
 package httpbin
 
 import (
+	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	httptrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/net/http"
+
+	"github.com/DataDog/datadog-go/statsd"
 )
 
 // Default configuration values
@@ -83,77 +87,109 @@ func (h *HTTPBin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Assert that HTTPBin implements http.Handler interface
 var _ http.Handler = &HTTPBin{}
 
+func getLatencyHandler(statsd *statsd.Client) func(endpoint string, handler http.HandlerFunc) http.HandlerFunc {
+	if statsd == nil {
+		// If no statsd exists, return the handler
+		return func(_ string, handler http.HandlerFunc) http.HandlerFunc {
+			return handler
+		}
+	}
+	envTag := "environment:" + os.Getenv("DD_ENV")
+	metricName := os.Getenv("DD_SERVICE") + ".timer"
+	return func(endpoint string, handler http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			startTime := time.Now()
+
+			// Call the original handler
+			handler(w, r)
+
+			endTime := time.Now()
+			latency := endTime.Sub(startTime).Nanoseconds()
+
+			resourceNameTag := fmt.Sprintf("resource_name:%s_%s", r.Method, endpoint)
+			statsd.Histogram(metricName, float64(latency)/1000000, []string{envTag, resourceNameTag}, 1)
+		}
+	}
+}
+
 // Handler returns an http.Handler that exposes all HTTPBin endpoints
 func (h *HTTPBin) Handler() http.Handler {
 	mux := httptrace.NewServeMux()
 
-	mux.HandleFunc("/", methods(h.Index, "GET"))
-	mux.HandleFunc("/forms/post", methods(h.FormsPost, "GET"))
-	mux.HandleFunc("/encoding/utf8", methods(h.UTF8, "GET"))
+	statsd, err := statsd.New(os.Getenv("STATSD_ADDR") + ":8125")
+	if err != nil {
+		fmt.Printf("no statsd: %s\n", err)
+	}
 
-	mux.HandleFunc("/delete", methods(h.RequestWithBody, "DELETE"))
-	mux.HandleFunc("/get", methods(h.Get, "GET"))
-	mux.HandleFunc("/head", methods(h.Get, "HEAD"))
-	mux.HandleFunc("/patch", methods(h.RequestWithBody, "PATCH"))
-	mux.HandleFunc("/post", methods(h.RequestWithBody, "POST"))
-	mux.HandleFunc("/put", methods(h.RequestWithBody, "PUT"))
+	wrapper := getLatencyHandler(statsd)
 
-	mux.HandleFunc("/anything", h.Anything)
-	mux.HandleFunc("/anything/", h.Anything)
+	mux.HandleFunc("/", wrapper("/", methods(h.Index, "GET")))
+	mux.HandleFunc("/forms/post", wrapper("/forms/post", methods(h.FormsPost, "GET")))
+	mux.HandleFunc("/encoding/utf8", wrapper("/encoding/utf8", methods(h.UTF8, "GET")))
 
-	mux.HandleFunc("/ip", h.IP)
-	mux.HandleFunc("/user-agent", h.UserAgent)
-	mux.HandleFunc("/headers", h.Headers)
-	mux.HandleFunc("/response-headers", h.ResponseHeaders)
-	mux.HandleFunc("/hostname", h.Hostname)
+	mux.HandleFunc("/delete", wrapper("/delete", methods(h.RequestWithBody, "DELETE")))
+	mux.HandleFunc("/get", wrapper("/get", methods(h.Get, "GET")))
+	mux.HandleFunc("/head", wrapper("/head", methods(h.Get, "HEAD")))
+	mux.HandleFunc("/patch", wrapper("/patch", methods(h.RequestWithBody, "PATCH")))
+	mux.HandleFunc("/post", wrapper("/post", methods(h.RequestWithBody, "POST")))
+	mux.HandleFunc("/put", wrapper("/put", methods(h.RequestWithBody, "PUT")))
 
-	mux.HandleFunc("/status/", h.Status)
-	mux.HandleFunc("/unstable", h.Unstable)
+	mux.HandleFunc("/anything", wrapper("/anything", h.Anything))
+	mux.HandleFunc("/anything/", wrapper("/anything/", h.Anything))
 
-	mux.HandleFunc("/redirect/", h.Redirect)
-	mux.HandleFunc("/relative-redirect/", h.RelativeRedirect)
-	mux.HandleFunc("/absolute-redirect/", h.AbsoluteRedirect)
-	mux.HandleFunc("/redirect-to", h.RedirectTo)
+	mux.HandleFunc("/ip", wrapper("/ip", h.IP))
+	mux.HandleFunc("/user-agent", wrapper("/user-agent", h.UserAgent))
+	mux.HandleFunc("/headers", wrapper("/headers", h.Headers))
+	mux.HandleFunc("/response-headers", wrapper("/response-headers", h.ResponseHeaders))
+	mux.HandleFunc("/hostname", wrapper("/hostname", h.Hostname))
 
-	mux.HandleFunc("/cookies", h.Cookies)
-	mux.HandleFunc("/cookies/set", h.SetCookies)
-	mux.HandleFunc("/cookies/delete", h.DeleteCookies)
+	mux.HandleFunc("/status/", wrapper("/status/", h.Status))
+	mux.HandleFunc("/unstable", wrapper("/unstable", h.Unstable))
 
-	mux.HandleFunc("/basic-auth/", h.BasicAuth)
-	mux.HandleFunc("/hidden-basic-auth/", h.HiddenBasicAuth)
-	mux.HandleFunc("/digest-auth/", h.DigestAuth)
-	mux.HandleFunc("/bearer", h.Bearer)
+	mux.HandleFunc("/redirect/", wrapper("/redirect/", h.Redirect))
+	mux.HandleFunc("/relative-redirect/", wrapper("/relative-redirect/", h.RelativeRedirect))
+	mux.HandleFunc("/absolute-redirect/", wrapper("/absolute-redirect/", h.AbsoluteRedirect))
+	mux.HandleFunc("/redirect-to", wrapper("/redirect-to", h.RedirectTo))
 
-	mux.HandleFunc("/deflate", h.Deflate)
-	mux.HandleFunc("/gzip", h.Gzip)
+	mux.HandleFunc("/cookies", wrapper("/cookies", h.Cookies))
+	mux.HandleFunc("/cookies/set", wrapper("/cookies/set", h.SetCookies))
+	mux.HandleFunc("/cookies/delete", wrapper("/cookies/delete", h.DeleteCookies))
 
-	mux.HandleFunc("/stream/", h.Stream)
-	mux.HandleFunc("/delay/", h.Delay)
-	mux.HandleFunc("/drip", h.Drip)
+	mux.HandleFunc("/basic-auth/", wrapper("/basic-auth/", h.BasicAuth))
+	mux.HandleFunc("/hidden-basic-auth/", wrapper("/hidden-basic-auth/", h.HiddenBasicAuth))
+	mux.HandleFunc("/digest-auth/", wrapper("/digest-auth/", h.DigestAuth))
+	mux.HandleFunc("/bearer", wrapper("/bearer", h.Bearer))
 
-	mux.HandleFunc("/range/", h.Range)
-	mux.HandleFunc("/bytes/", h.Bytes)
-	mux.HandleFunc("/stream-bytes/", h.StreamBytes)
+	mux.HandleFunc("/deflate", wrapper("/deflate", h.Deflate))
+	mux.HandleFunc("/gzip", wrapper("/gzip", h.Gzip))
 
-	mux.HandleFunc("/html", h.HTML)
-	mux.HandleFunc("/robots.txt", h.Robots)
-	mux.HandleFunc("/deny", h.Deny)
+	mux.HandleFunc("/stream/", wrapper("/stream/", h.Stream))
+	mux.HandleFunc("/delay/", wrapper("/delay/", h.Delay))
+	mux.HandleFunc("/drip", wrapper("/drip", h.Drip))
 
-	mux.HandleFunc("/cache", h.Cache)
-	mux.HandleFunc("/cache/", h.CacheControl)
-	mux.HandleFunc("/etag/", h.ETag)
+	mux.HandleFunc("/range/", wrapper("/range/", h.Range))
+	mux.HandleFunc("/bytes/", wrapper("/bytes/", h.Bytes))
+	mux.HandleFunc("/stream-bytes/", wrapper("/stream-bytes/", h.StreamBytes))
 
-	mux.HandleFunc("/links/", h.Links)
+	mux.HandleFunc("/html", wrapper("/html", h.HTML))
+	mux.HandleFunc("/robots.txt", wrapper("/robots.txt", h.Robots))
+	mux.HandleFunc("/deny", wrapper("/deny", h.Deny))
 
-	mux.HandleFunc("/image", h.ImageAccept)
-	mux.HandleFunc("/image/", h.Image)
-	mux.HandleFunc("/xml", h.XML)
-	mux.HandleFunc("/json", h.JSON)
+	mux.HandleFunc("/cache", wrapper("/cache", h.Cache))
+	mux.HandleFunc("/cache/", wrapper("/cache/", h.CacheControl))
+	mux.HandleFunc("/etag/", wrapper("/etag/", h.ETag))
 
-	mux.HandleFunc("/uuid", h.UUID)
-	mux.HandleFunc("/base64/", h.Base64)
+	mux.HandleFunc("/links/", wrapper("/links/", h.Links))
 
-	mux.HandleFunc("/dump/request", h.DumpRequest)
+	mux.HandleFunc("/image", wrapper("/image", h.ImageAccept))
+	mux.HandleFunc("/image/", wrapper("/image/", h.Image))
+	mux.HandleFunc("/xml", wrapper("/xml", h.XML))
+	mux.HandleFunc("/json", wrapper("/json", h.JSON))
+
+	mux.HandleFunc("/uuid", wrapper("/uuid", h.UUID))
+	mux.HandleFunc("/base64/", wrapper("/base64/", h.Base64))
+
+	mux.HandleFunc("/dump/request", wrapper("/dump/request", h.DumpRequest))
 
 	// existing httpbin endpoints that we do not support
 	mux.HandleFunc("/brotli", notImplementedHandler)
