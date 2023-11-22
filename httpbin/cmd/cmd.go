@@ -17,6 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
+
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 
 	"github.com/mccutchen/go-httpbin/v2/httpbin"
@@ -93,6 +96,9 @@ func mainImpl(args []string, getEnv func(string) string, getHostname func() (str
 		ReadHeaderTimeout: srvReadHeaderTimeout,
 		ReadTimeout:       srvReadTimeout,
 	}
+	if cfg.EnableHTTP2 {
+		plainSrv.Handler = h2c.NewHandler(plainSrv.Handler, &http2.Server{})
+	}
 	var tlsSrv *http.Server
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
 		tlsSrv = &http.Server{
@@ -101,7 +107,11 @@ func mainImpl(args []string, getEnv func(string) string, getHostname func() (str
 			MaxHeaderBytes:    srvMaxHeaderBytes,
 			ReadHeaderTimeout: srvReadHeaderTimeout,
 			ReadTimeout:       srvReadTimeout,
-			TLSNextProto:      make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+		}
+		if cfg.EnableHTTP2 {
+			tlsSrv.Handler = h2c.NewHandler(tlsSrv.Handler, &http2.Server{})
+		} else {
+			tlsSrv.TLSNextProto = make(map[string]func(*http.Server, *tls.Conn, http.Handler))
 		}
 	}
 
@@ -126,6 +136,7 @@ type config struct {
 	RealHostname           string
 	TLSCertFile            string
 	TLSKeyFile             string
+	EnableHTTP2            bool
 
 	// temporary placeholders for arguments that need extra processing
 	rawAllowedRedirectDomains string
@@ -163,6 +174,7 @@ func loadConfig(args []string, getEnv func(string) string, getHostname func() (s
 	fs.StringVar(&cfg.TLSCertFile, "https-cert-file", "", "HTTPS Server certificate file")
 	fs.StringVar(&cfg.TLSKeyFile, "https-key-file", "", "HTTPS Server private key file")
 	fs.StringVar(&cfg.ExcludeHeaders, "exclude-headers", "", "Drop platform-specific headers. Comma-separated list of headers key to drop, supporting wildcard matching.")
+	fs.BoolVar(&cfg.EnableHTTP2, "enable-http2", false, "Should we enable HTTP2? Works both with TLS and plain traffic.")
 
 	// in order to fully control error output whether CLI arguments or env vars
 	// are used to configure the app, we need to take control away from the
