@@ -107,7 +107,7 @@ func getLatencyHandler(statsd *statsd.Client) func(endpoint string, handler http
 			latency := endTime.Sub(startTime).Nanoseconds()
 
 			resourceNameTag := fmt.Sprintf("resource_name:%s_%s", r.Method, endpoint)
-			statsd.Histogram(metricName, float64(latency)/1000000, []string{envTag, resourceNameTag}, 1)
+			statsd.Histogram(metricName, float64(latency)/1000000000, []string{envTag, resourceNameTag}, 1)
 		}
 	}
 }
