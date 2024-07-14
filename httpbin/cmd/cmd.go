@@ -88,6 +88,8 @@ func mainImpl(args []string, getEnv func(string) string, getHostname func() (str
 		opts = append(opts, httpbin.WithAllowedRedirectDomains(cfg.AllowedRedirectDomains))
 	}
 	app := httpbin.New(opts...)
+	app.HTTP2Enabled = cfg.EnableHTTP2
+	app.TLSEnabled = cfg.TLSCertFile != "" && cfg.TLSKeyFile != ""
 
 	plainSrv := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.PlainListenPort)),

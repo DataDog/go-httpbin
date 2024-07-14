@@ -62,6 +62,9 @@ type HTTPBin struct {
 	handler http.Handler
 
 	excludeHeadersProcessor headersProcessorFunc
+
+	HTTP2Enabled bool
+	TLSEnabled   bool
 }
 
 // New creates a new HTTPBin instance
@@ -87,15 +90,14 @@ func (h *HTTPBin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Assert that HTTPBin implements http.Handler interface
 var _ http.Handler = &HTTPBin{}
 
-func getLatencyHandler(statsd *statsd.Client) func(endpoint string, handler http.HandlerFunc) http.HandlerFunc {
+func (h *HTTPBin) getLatencyHandler(statsd *statsd.Client) func(endpoint string, handler http.HandlerFunc) http.HandlerFunc {
 	if statsd == nil {
 		// If no statsd exists, return the handler
 		return func(_ string, handler http.HandlerFunc) http.HandlerFunc {
 			return handler
 		}
 	}
-	envTag := "environment:" + os.Getenv("DD_ENV")
-	metricName := os.Getenv("DD_SERVICE") + ".timer"
+	const metricName = "golang_httpbin.timer"
 	return func(endpoint string, handler http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			startTime := time.Now()
@@ -106,8 +108,16 @@ func getLatencyHandler(statsd *statsd.Client) func(endpoint string, handler http
 			endTime := time.Now()
 			latency := endTime.Sub(startTime).Nanoseconds()
 
-			resourceNameTag := fmt.Sprintf("resource_name:%s_%s", r.Method, endpoint)
-			statsd.Histogram(metricName, float64(latency)/1000000000, []string{envTag, resourceNameTag}, 1)
+			tags := []string{fmt.Sprintf("resource_name:%s_%s", r.Method, endpoint)}
+			if h.HTTP2Enabled {
+				tags = append(tags, "http.version:http/2")
+			} else {
+				tags = append(tags, "http.version:http/1.1")
+			}
+			if h.TLSEnabled {
+				tags = append(tags, "tls.library:go")
+			}
+			statsd.Histogram(metricName, float64(latency)/1000000000, tags, 1)
 		}
 	}
 }
@@ -121,7 +131,7 @@ func (h *HTTPBin) Handler() http.Handler {
 		fmt.Printf("no statsd: %s\n", err)
 	}
 
-	wrapper := getLatencyHandler(statsd)
+	wrapper := h.getLatencyHandler(statsd)
 
 	mux.HandleFunc("/", wrapper("/", methods(h.Index, "GET")))
 	mux.HandleFunc("/forms/post", wrapper("/forms/post", methods(h.FormsPost, "GET")))
