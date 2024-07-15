@@ -114,7 +114,7 @@ func (h *HTTPBin) getLatencyHandler(statsd *statsd.Client) func(endpoint string,
 			} else {
 				tags = append(tags, "http.version:http/1.1")
 			}
-			if h.TLSEnabled {
+			if r.TLS != nil {
 				tags = append(tags, "tls.library:go")
 			}
 			statsd.Histogram(metricName, float64(latency)/1000000000, tags, 1)
